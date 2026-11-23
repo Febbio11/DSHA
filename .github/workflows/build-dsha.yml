@@ -36,23 +36,15 @@ jobs:
             --url "$(python3 -c 'import json;print(json.load(open("ci/sunset-inputs.lock.json"))["url"])')" \
             --sha256 "$(python3 -c 'import json;print(json.load(open("ci/sunset-inputs.lock.json"))["sha256"])')"
 
-      - name: Build Standard Release APK
-        run: |
-          chmod +x gradlew
-          ./gradlew :app:assembleStandardRelease -x verifyPublishCertificate
-
-      - name: Sign APK for direct Android install
+      - name: Prepare personal signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASS: ${{ secrets.KEY_PASS }}
         run: |
-          RAW_APK=$(find app/build/outputs/apk/standard/release -name "*.apk" | head -n 1)
-          echo "Found APK: $RAW_APK"
-
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+            echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
             KS_PASS="$KEYSTORE_PASS"
             K_ALIAS="$KEY_ALIAS"
             K_PASS="$KEY_PASS"
@@ -60,21 +52,33 @@ jobs:
             KS_PASS="dsha123456"
             K_ALIAS="dsha"
             K_PASS="dsha123456"
-            keytool -genkeypair -v -keystore release.jks -storetype PKCS12 \
+            keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/release.jks" -storetype PKCS12 \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -alias "$K_ALIAS" -storepass "$KS_PASS" -keypass "$K_PASS" \
               -dname "CN=DSHA Personal, OU=Personal, O=Personal, L=Local, S=Local, C=ID"
           fi
 
+          cat << EOF >> app/build.gradle
+
+          android.signingConfigs.publish {
+              storeFile file("${GITHUB_WORKSPACE}/release.jks")
+              storePassword "${KS_PASS}"
+              keyAlias "${K_ALIAS}"
+              keyPassword "${K_PASS}"
+          }
+          EOF
+
+      - name: Build Standard Release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleStandardRelease -x verifyPublishCertificate
+
+      - name: Verify and prepare APK
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/standard/release -name "*.apk" | head -n 1)
+          echo "Built APK: $APK_PATH"
+          cp "$APK_PATH" dsha-signed.apk
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
-          "$BUILD_TOOLS/zipalign" -f -p 4 "$RAW_APK" dsha-aligned.apk
-          "$BUILD_TOOLS/apksigner" sign \
-            --ks release.jks \
-            --ks-pass "pass:$KS_PASS" \
-            --ks-key-alias "$K_ALIAS" \
-            --key-pass "pass:$K_PASS" \
-            --out dsha-signed.apk \
-            dsha-aligned.apk
           "$BUILD_TOOLS/apksigner" verify --verbose dsha-signed.apk
 
       - name: Upload signed APK
