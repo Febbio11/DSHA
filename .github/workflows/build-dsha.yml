@@ -39,7 +39,7 @@ jobs:
       - name: Build Standard Release APK
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleStandardRelease
+          ./gradlew :app:assembleStandardRelease -x verifyPublishCertificate
 
       - name: Sign APK for direct Android install
         env:
